@@ -1,0 +1,33 @@
+name: Docker runner smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Host and tool inventory
+        run: |
+          set -euxo pipefail
+          date -u +%Y-%m-%dT%H:%M:%SZ
+          uname -a
+          nproc
+          free -h
+          df -h
+          git --version
+          docker version
+          docker info
+          docker compose version
+          kind version
+          kubectl version --client=true
+          zstd --version
+
+      - name: Docker execution smoke
+        run: |
+          set -euxo pipefail
+          docker network create otel-smoke-net
+          docker run --rm hello-world
+          docker run --rm --network=none busybox:1.36 true
+          docker network rm otel-smoke-net
