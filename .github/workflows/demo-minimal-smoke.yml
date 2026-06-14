@@ -26,22 +26,38 @@ jobs:
           cd demo
           git rev-parse HEAD
           git status --short
-          docker compose -f docker-compose.minimal.yml config --services
+          docker compose --env-file .env --env-file .env.override \
+            -f compose.yaml \
+            -f compose.observability.yaml \
+            -f compose.extras.yaml \
+            config --services
 
       - name: Pull minimal Demo images
         run: |
           set -euxo pipefail
           cd demo
-          time docker compose -f docker-compose.minimal.yml pull --ignore-buildable
+          time docker compose --env-file .env --env-file .env.override \
+            -f compose.yaml \
+            -f compose.observability.yaml \
+            -f compose.extras.yaml \
+            pull --ignore-buildable
 
       - name: Start minimal Demo and probe endpoints
         run: |
           set -euxo pipefail
           cd demo
-          time docker compose -f docker-compose.minimal.yml up --force-recreate --remove-orphans --detach
+          time docker compose --env-file .env --env-file .env.override \
+            -f compose.yaml \
+            -f compose.observability.yaml \
+            -f compose.extras.yaml \
+            up --force-recreate --remove-orphans --detach
           for attempt in $(seq 1 60); do
             echo "frontend probe attempt ${attempt}"
-            docker compose -f docker-compose.minimal.yml ps
+            docker compose --env-file .env --env-file .env.override \
+              -f compose.yaml \
+              -f compose.observability.yaml \
+              -f compose.extras.yaml \
+              ps
             if curl -fsS -o /tmp/demo_frontend.html http://localhost:8080/; then
               break
             fi
@@ -66,9 +82,18 @@ jobs:
           if [ -d demo ]; then
             cd demo
             git rev-parse HEAD
-            docker compose -f docker-compose.minimal.yml ps -a
-            docker compose -f docker-compose.minimal.yml logs --no-color --tail=250
+            docker compose --env-file .env --env-file .env.override \
+              -f compose.yaml \
+              -f compose.observability.yaml \
+              -f compose.extras.yaml \
+              ps -a
+            docker compose --env-file .env --env-file .env.override \
+              -f compose.yaml \
+              -f compose.observability.yaml \
+              -f compose.extras.yaml \
+              logs --no-color --tail=250
           fi
+          exit 0
 
       - name: Shut down Demo
         if: always()
@@ -76,5 +101,10 @@ jobs:
           set +e
           if [ -d demo ]; then
             cd demo
-            docker compose -f docker-compose.minimal.yml down -v --remove-orphans
+            docker compose --env-file .env --env-file .env.override \
+              -f compose.yaml \
+              -f compose.observability.yaml \
+              -f compose.extras.yaml \
+              down -v --remove-orphans
           fi
+          exit 0
