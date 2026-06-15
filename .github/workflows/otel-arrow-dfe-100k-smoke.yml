@@ -1,0 +1,120 @@
+name: OTel-Arrow DFE 100k smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dfe-100k-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      OTEL_ARROW_COMMIT: f8cd17f084c1a766f887530531ad06f546080c90
+      ARTIFACT_DIR: otel-arrow-dfe-100k-smoke-artifacts
+    steps:
+      - name: Host inventory
+        run: |
+          set -euxo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          {
+            date -u +%Y-%m-%dT%H:%M:%SZ
+            uname -a
+            lscpu
+            free -h
+            df -h
+            git --version
+            python3 --version
+            docker version
+            docker info
+            docker compose version || true
+            docker buildx version || true
+          } | tee "$ARTIFACT_DIR/host_inventory.log"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Clone pinned OTel-Arrow
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://github.com/open-telemetry/otel-arrow.git otel-arrow
+          cd otel-arrow
+          git fetch --depth 1 origin "$OTEL_ARROW_COMMIT"
+          git checkout "$OTEL_ARROW_COMMIT"
+          git rev-parse HEAD | tee "../$ARTIFACT_DIR/otel_arrow_commit.txt"
+          git submodule init
+          git submodule update
+
+      - name: Install benchmark dependencies
+        run: |
+          set -euxo pipefail
+          cd otel-arrow
+          python -m pip install --upgrade pip
+          python -m pip install --user --require-hashes -r tools/pipeline_perf_test/orchestrator/requirements.lock.txt
+          python -m pip install --user --require-hashes -r tools/pipeline_perf_test/load_generator/requirements.lock.txt
+          python -m pip install --user -r tools/comparison_dashboard/requirements.txt
+          python -m pip list | tee "../$ARTIFACT_DIR/pip_freeze.log"
+
+      - name: Build dataflow engine Docker image
+        run: |
+          set -euxo pipefail
+          cd otel-arrow/rust/otap-dataflow
+          /usr/bin/time -v -o "../../../$ARTIFACT_DIR/df_engine_docker_build_time.txt" \
+            docker buildx build --load --build-context otel-arrow=../../ -f Dockerfile -t df_engine .
+
+      - name: Run comparison-dashboard DFE 100k smoke
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/comparison_data"
+          cd otel-arrow/tools/comparison_dashboard
+          python dashboard.py validate | tee "$GITHUB_WORKSPACE/$ARTIFACT_DIR/dashboard_validate.log"
+          /usr/bin/time -v -o "$GITHUB_WORKSPACE/$ARTIFACT_DIR/dashboard_run_time.txt" \
+            python dashboard.py run \
+              suites/dfe/dfe-logs-otap-zstd-baseline.yaml \
+              suites/dfe/dfe-logs-otlp-zstd-baseline.yaml \
+              --tests 100k \
+              --observation-interval 20 \
+              --clean \
+              --data-dir "$GITHUB_WORKSPACE/comparison_data" \
+            | tee "$GITHUB_WORKSPACE/$ARTIFACT_DIR/dashboard_run_stdout.log"
+
+      - name: Collect resource and Docker logs
+        if: always()
+        run: |
+          set +e
+          mkdir -p "$ARTIFACT_DIR"
+          {
+            date -u +%Y-%m-%dT%H:%M:%SZ
+            free -h
+            df -h
+            docker system df
+            docker ps -a
+            docker images
+            docker stats --no-stream
+          } > "$ARTIFACT_DIR/final_resource_inventory.log" 2>&1
+          if [ -d comparison_data ]; then
+            find comparison_data -maxdepth 5 -type f -printf '%p\t%s\n' | sort \
+              > "$ARTIFACT_DIR/comparison_data_file_list.tsv"
+          fi
+          if [ -d otel-arrow/tools/comparison_dashboard/.data ]; then
+            find otel-arrow/tools/comparison_dashboard/.data -maxdepth 7 -type f -printf '%p\t%s\n' | sort \
+              > "$ARTIFACT_DIR/staging_data_file_list.tsv"
+          fi
+          tar -czf "$ARTIFACT_DIR/comparison_data.tgz" comparison_data 2>/dev/null || true
+          tar -czf "$ARTIFACT_DIR/dashboard_staging_data.tgz" -C otel-arrow/tools/comparison_dashboard .data 2>/dev/null || true
+          exit 0
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: otel-arrow-dfe-100k-smoke-artifacts
+          path: |
+            otel-arrow-dfe-100k-smoke-artifacts/**
+            comparison_data/**
+            otel-arrow/tools/comparison_dashboard/.data/**
+          if-no-files-found: warn
+          retention-days: 7
